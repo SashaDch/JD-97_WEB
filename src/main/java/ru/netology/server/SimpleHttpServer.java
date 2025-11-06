@@ -1,45 +1,61 @@
 package ru.netology.server;
 
-import java.io.BufferedOutputStream;
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 
-public class SimpleHttpServer implements Server, AutoCloseable {
+public class SimpleHttpServer implements CustomizableServer, AutoCloseable {
     private static final int DEFAULT_THREAD_POOL_SIZE = 64;
     private static final int DEFAULT_SERVER_PORT = 9999;
     private static final long OVERLOAD_ACCEPT_TIMEOUT = 5000;
     private static final int SOCKET_TIMEOUT = 5000;
     private static final int ACCEPT_TIMEOUT = 1000;
-    private static final List<String> validPaths = List.of("/index.html",
-            "/spring.svg",
-            "/spring.png",
-            "/resources.html",
-            "/styles.css",
-            "/app.js",
-            "/links.html",
-            "/forms.html",
-            "/classic.html",
-            "/events.html",
-            "/events.js");
+    private static final List<String> VALID_PATHS = List.of("/index.html", "/spring.svg", "/spring.png", "/resources.html", "/styles.css", "/app.js", "/links.html", "/forms.html", "/classic.html", "/events.html", "/events.js");
+    private static final Handler DEFAULT_HANDLER = (request, responseStream) -> {
+        try {
+            if (request == null) {
+                badRequest(responseStream);
+                return;
+            }
+            String path = request.getPath();
+            if (request.getMethod() == null || !request.getMethod().equals("GET") || !VALID_PATHS.contains(path)) {
+                notFound(responseStream);
+                return;
+            }
+            final var filePath = Path.of(".", "public", path);
+            final var mimeType = Files.probeContentType(filePath);
+            final var length = Files.size(filePath);
+            responseStream.write((
+                    "HTTP/1.1 200 OK\r\n" +
+                            "Content-Type: " + mimeType + "\r\n" +
+                            "Content-Length: " + length + "\r\n" +
+                            "Connection: close\r\n" +
+                            "\r\n"
+            ).getBytes());
+            Files.copy(filePath, responseStream);
+            responseStream.flush();
+        } catch (IOException ioe) {
+            ioe.printStackTrace();
+        }
+    };
 
     private ServerSocket serverSocket;
     private ExecutorService threadPool;
     private Thread acceptLoopThread;
     private final int threadPoolSize;
     private final int serverPort;
+    private final Map<String, Map<String, Handler>> handlers = new HashMap<>();
 
     private volatile boolean running = false;
 
@@ -104,6 +120,15 @@ public class SimpleHttpServer implements Server, AutoCloseable {
         stop();
     }
 
+    @Override
+    public synchronized void addHandler(String method, String path, Handler handler) {
+        if (!handlers.containsKey(method)) {
+            handlers.put(method, new HashMap<>());
+        }
+        handlers.get(method).put(path, handler);
+    }
+
+
     private void acceptLoop() {
         while (running) {
             Socket socket = null;
@@ -149,68 +174,40 @@ public class SimpleHttpServer implements Server, AutoCloseable {
     }
 
     public void process(Socket socket) {
-        try (
-                final var in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                final var out = new BufferedOutputStream(socket.getOutputStream())
-        ) {
-            // read only request line for simplicity
-            // must be in form GET /path HTTP/1.1
-            final var requestLine = in.readLine();
-            final var parts = requestLine.split(" ");
-
-            if (parts.length != 3) {
-                // just close socket
-                return;
+        try {
+            final var in = new BufferedInputStream(socket.getInputStream());
+            final var out = new BufferedOutputStream(socket.getOutputStream());
+            Request request = MyRequest.parse(in);
+            Handler handler = DEFAULT_HANDLER;
+            if (request != null && handlers.containsKey(request.getMethod())) {
+                handler = handlers.get(request.getMethod()).getOrDefault(request.getPath(), DEFAULT_HANDLER);
             }
-
-            final var path = parts[1];
-            if (!validPaths.contains(path)) {
-                out.write((
-                        "HTTP/1.1 404 Not Found\r\n" +
-                                "Content-Length: 0\r\n" +
-                                "Connection: close\r\n" +
-                                "\r\n"
-                ).getBytes());
-                out.flush();
-                return;
-            }
-
-            final var filePath = Path.of(".", "public", path);
-            final var mimeType = Files.probeContentType(filePath);
-
-            // special case for classic
-            if (path.equals("/classic.html")) {
-                final var template = Files.readString(filePath);
-                final var content = template.replace(
-                        "{time}",
-                        LocalDateTime.now().toString()
-                ).getBytes();
-                out.write((
-                        "HTTP/1.1 200 OK\r\n" +
-                                "Content-Type: " + mimeType + "\r\n" +
-                                "Content-Length: " + content.length + "\r\n" +
-                                "Connection: close\r\n" +
-                                "\r\n"
-                ).getBytes());
-                out.write(content);
-                out.flush();
-                return;
-            }
-
-            final var length = Files.size(filePath);
-            out.write((
-                    "HTTP/1.1 200 OK\r\n" +
-                            "Content-Type: " + mimeType + "\r\n" +
-                            "Content-Length: " + length + "\r\n" +
-                            "Connection: close\r\n" +
-                            "\r\n"
-            ).getBytes());
-            Files.copy(filePath, out);
-            out.flush();
+            handler.handle(request, out);
         } catch (IOException ioe) {
             ioe.printStackTrace();
         }
     }
+
+    private static void badRequest(BufferedOutputStream responseStream) throws IOException {
+        responseStream.write((
+                "HTTP/1.1 400 Bad Request\r\n" +
+                        "Content-Length: 0\r\n" +
+                        "Connection: close\r\n" +
+                        "\r\n"
+        ).getBytes());
+        responseStream.flush();
+    }
+
+    private static void notFound(BufferedOutputStream responseStream) throws IOException {
+        responseStream.write((
+                "HTTP/1.1 404 Not Found\r\n" +
+                        "Content-Length: 0\r\n" +
+                        "Connection: close\r\n" +
+                        "\r\n"
+        ).getBytes());
+        responseStream.flush();
+    }
+
 
     public SimpleHttpServer() {
         this(DEFAULT_SERVER_PORT);
@@ -224,4 +221,5 @@ public class SimpleHttpServer implements Server, AutoCloseable {
         this.serverPort = serverPort;
         this.threadPoolSize = threadPoolSize;
     }
+
 }
