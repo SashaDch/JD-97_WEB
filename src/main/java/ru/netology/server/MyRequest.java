@@ -1,7 +1,6 @@
 package ru.netology.server;
 
 import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.util.*;
 
@@ -59,10 +58,11 @@ public class MyRequest implements Request {
                 if (!pathAndParams[1].matches("[^&?=]+=[^&?=]+(&[^&?=]+=[^&?=]+)*")) {
                     return null;
                 }
-                Arrays.stream(pathAndParams[1].split("&"))
-                        .map((param) -> request.params.put(
-                                param.split("=", 2)[0],
-                                param.split("=", 2)[1]));
+                for (String param : pathAndParams[1].split("&")) {
+                    request.params.put(
+                            param.split("=", 2)[0],
+                            param.split("=", 2)[1]);
+                }
                 System.out.println(request.params);
             }
 
