@@ -1,7 +1,6 @@
 package ru.netology.server;
 
 import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.util.*;
 
@@ -45,7 +44,6 @@ public class MyRequest implements Request {
             if (!ALLOWED_METHODS.contains(request.method)) {
                 return null;
             }
-            System.out.println(request.method);
 
             final var pathAndParams = requestLine[1].split("\\?", 2);
 
@@ -53,17 +51,16 @@ public class MyRequest implements Request {
             if (!request.path.startsWith("/")) {
                 return null;
             }
-            System.out.println(request.path);
 
             if (pathAndParams.length > 1) {
                 if (!pathAndParams[1].matches("[^&?=]+=[^&?=]+(&[^&?=]+=[^&?=]+)*")) {
                     return null;
                 }
-                Arrays.stream(pathAndParams[1].split("&"))
-                        .map((param) -> request.params.put(
-                                param.split("=", 2)[0],
-                                param.split("=", 2)[1]));
-                System.out.println(request.params);
+                for (String param : pathAndParams[1].split("&")) {
+                    request.params.put(
+                            param.split("=", 2)[0],
+                            param.split("=", 2)[1]);
+                }
             }
 
             // ищем заголовки
@@ -84,8 +81,6 @@ public class MyRequest implements Request {
             for (String header : headers) {
                 request.headers.put(header.split(": ")[0], header.split(": ")[1]);
             }
-            System.out.println(headers);
-            System.out.println(request.headers);
 
             // для GET тела нет
             if (!request.method.equals("GET")) {
@@ -97,14 +92,25 @@ public class MyRequest implements Request {
                     final var bodyBytes = in.readNBytes(length);
 
                     request.body = new String(bodyBytes);
-                    System.out.println(request.body);
                 }
             }
         } catch (IOException e) {
             e.printStackTrace();
             return null;
         }
+        System.out.println(request);
         return request;
+    }
+
+    @Override
+    public String toString() {
+        return "MyRequest{" +
+                "method='" + method + '\'' +
+                ", path='" + path + '\'' +
+                ", params=" + params +
+                ", headers=" + headers +
+                (body == null ? "" : ", body='" + body + '\'') +
+                '}';
     }
 
     @Override
